@@ -1,0 +1,207 @@
+---
+title: "DDS Case Study 2 Analysis"
+author: "Akbar Thobani"
+date: "04/04/2020"
+output:
+  pdf_document: default
+  html_document: default
+keep_md: yes
+---
+
+#Problem Introduction
+DDS Analytics has tasked us with to uncover insights and trends specific to Job Roles within the company and how those factors contribute to turnover/attrition. 
+
+
+#Analysis Objectives
+1) Uncover any intersting trends specific to Job Role <br />
+2) Report the top 3 factors that contribute to turnover <br />
+3) Build a model to predict attrition<br />
+4) Build a model to predict salary <br />
+
+#Packages
+```{r message=FALSE}
+library(ggplot2)
+library(corrplot)
+library(dplyr)
+library(caret)
+library(MASS)
+library(randomForest)
+library(e1071)
+library(tidyverse)
+```
+
+#Data Import
+```{r echo=TRUE}
+dfTrain <- read.csv(file="CaseStudy2-data.csv", header=TRUE, stringsAsFactors=TRUE)
+dfVal <- read.csv(file="CaseStudy2validation.csv", header=TRUE, stringsAsFactors=TRUE)
+
+dfCompAtt <- read.csv(file="CaseStudy2CompSet No Attrition.csv", header=TRUE, stringsAsFactors=TRUE)
+dfCompSal <- read.csv(file="CaseStudy2CompSet No Salary.csv", header=TRUE, stringsAsFactors=TRUE)
+```
+
+#Data Check
+We want to make sure the dataset provided does not have any missing values or mixed data types before we begin our explaoratory and modeling exercises. 
+```{r echo=TRUE}
+str(dfVal)
+
+#No missing values 
+#sum(is.na(dfVal))
+#colSums(is.na(dfTrain))
+#colSums(is.na(dfVal))
+
+#View(summary(df))
+```
+
+
+#Data Preparation
+There are a few variables that seem useless for the purposes of this analysis. ID, Standard Hours, Employee Number and Employee Count will be removed from the table
+```{r echo=TRUE}
+#Recode Attrition Column to numeric if necessary
+#df$Attrition2 <- ifelse(df$Attrition == "Yes", 1, 0)
+
+#Drop ID, StandardHours, EmployeeCount, Over18 columns
+#Most values do not change so SD is 0
+
+df_stage <- dfTrain[,!(names(dfTrain) %in% c("ID", "StandardHours", "EmployeeNumber", "EmployeeCount", "Over18"))]
+df_val_stage <- dfVal[,!(names(dfVal) %in% c("ID", "StandardHours", "EmployeeNumber", "EmployeeCount", "Over18"))]
+
+```
+
+An additional dataframe was created with only numeric values to be read by a correlation heatmap later in the analysis.
+```{r echo=TRUE}
+#Return numeric values only
+df_numeric <- df_stage[, sapply(df_stage, is.numeric)]
+df_val_numeric <- df_val_stage[, sapply(df_val_stage, is.numeric)]
+
+#Correlation Plot
+df_corr <- round(cor(df_numeric),2)
+```
+
+
+#Data Exploration
+More than 80% of the training dataset consist of employees who are still retained
+```{r echo=TRUE}
+table(dfTrain$Attrition)
+barplot(prop.table(table(dfTrain$Attrition)))
+```
+
+We created a correlation matrix to view possible multicollinearity between variables that need to be addressed before the modeling phase to avoid redundancy. 
+
+The variables below seem to have high collinearity so we will remove some of them for the Custom model at a later phase:
+
+MonthlyIncome corr JobLevel <br />
+PercentSalaryHike corr PerformanceRating <br />
+TotalWorkingYears corr JobLevel <br />
+Age corr TotalWorkingYears <br />
+YearsInCurrentRole corr TotalWorkingYears 
+```{r echo=TRUE}
+corrplot(df_corr, order="FPC", title="Variable Corr Heatmap",tl.srt=45,method = "pie")
+```
+
+Figure 1 shows the count distribution of employees by job role. Sales Executive jobs are the most prevalent at 22% of all Job Roles followed closely by Research Scientist at 20% and Lab Technicians at 18% rounding out the top 3.
+```{r echo=TRUE}
+p1 <- ggplot(dfTrain, aes(x=JobRole), color=JobRole) + ggtitle("Figure 1: Job Role") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..), fill=JobRole),  width = 0.7) + 
+  labs(y="Percentage") + 
+  coord_flip() + 
+  theme_linedraw() +
+  theme(plot.title = element_text(hjust = 0.7)) 
+p1
+```
+
+Figure 2 is another view showing the percentage of total by each Job Role
+```{r echo=TRUE}
+p2 <- ggplot(dfTrain, aes(x=JobRole, y = ..prop.., group=1)) +
+  geom_bar() +
+  geom_text(stat = "count", 
+            aes(label = round(..prop.., 2), y = ..prop.. + 0.02)) +
+            coord_flip() +
+  ggtitle("Figure 2: Job Role by Percent of Total") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+p2
+```
+
+Although Lab Technician roles account for almost 17% of all Job Roles, the attrition total and porportion seems to abnormally high. 
+```{r echo=TRUE}
+p3 <- ggplot(dfTrain,aes(x = JobRole,fill = Attrition)) +
+    geom_bar(position = position_stack(reverse = FALSE)) +
+    ggtitle("Job Role vs Attrition - Count") +
+    coord_flip() +
+    theme(legend.position = "top") +
+    theme(plot.title = element_text(hjust = 0.8))
+
+p3
+```
+
+Naive Bayes Model
+```{r echo=TRUE}
+Naive_Bayes_Model=naiveBayes( Attrition~., data=dfTrain)
+
+#Summary of model
+Naive_Bayes_Model
+#Prediction on validation dataset
+dfPreds0=predict(Naive_Bayes_Model,dfVal)
+confusionMatrix(table(dfPreds0,dfVal$Attrition))
+cMatrix<-table(dfPreds0, dfVal$Attrition)
+plot(cMatrix, col="blue", ylab="Actual", xlab="Predicted", main='Naive Bayes Confusion Matrix')
+
+#Test against competition dataset
+dfPreds_Comp_Att=predict(Naive_Bayes_Model,dfCompAtt)
+```
+
+KNN nearest neighbor classification
+```{r echo=TRUE}
+
+indx <- sapply(dfTrain, is.factor)
+dfTrain[indx] <- lapply(dfTrain[indx], function(x) as.numeric(as.factor(x)))
+dfTrain <- dfTrain[, sapply(dfTrain, is.numeric)]
+
+indx <- sapply(dfVal, is.factor)
+dfVal[indx] <- lapply(dfVal[indx], function(x) as.numeric(as.factor(x)))
+dfVal <- dfVal[, sapply(dfVal, is.numeric)]
+
+indx <- sapply(dfCompAtt, is.factor)
+dfCompAtt[indx] <- lapply(dfCompAtt[indx], function(x) as.numeric(as.factor(x)))
+dfCompAtt <- dfCompAtt[, sapply(dfCompAtt, is.numeric)]
+
+# k = 10
+#classifications = knn(dfTrain[,c(4:35)],dfVal[,c(4:35)],dfTrain$Attrition,k = 9, l=0, prob = FALSE, use.all = TRUE)
+#table(dfVal$Attrition,classifications)
+#confusionMatrix(table(dfVal$Attrition,classifications))
+
+```
+
+
+#Output Dataset
+```{r echo=FALSE}
+#Write out Competition results
+dfPreds1=cbind(dfCompAtt$ID, dfPreds_Comp_Att)
+dfPreds=as.data.frame(dfPreds1)
+names(dfPreds)<- c("ID", "Attrition")
+write.csv(dfPreds,"DDSCaseStudy2_Predict_Attrition.csv",row.names = FALSE)
+
+```
+
+Linear Regression Model to Predict Salary
+```{r echo=TRUE}
+dfTrain <- read.csv(file="CaseStudy2-data.csv", header=TRUE, stringsAsFactors=TRUE)
+
+lr_mod <- lm(MonthlyIncome ~ Attrition + JobSatisfaction + Age + Education + JobLevel +
+  PerformanceRating + YearsSinceLastPromotion + YearsWithCurrManager + WorkLifeBalance +
+  YearsAtCompany + JobRole + EducationField , data=dfTrain)
+
+predictMonthlyIncome <- predict(lr_mod, dfCompSal, se.fit = TRUE)
+summary(lr_mod)
+plot(lr_mod)
+
+```  
+
+#Output Monthly Income Dataset
+```{r echo=FALSE}
+#Write out Competition results
+dfIncomePreds=cbind(dfCompSal$ID, round(predictMonthlyIncome$fit,0))
+dfIncomePreds=as.data.frame(dfIncomePreds)
+names(dfIncomePreds)<- c("ID", "Monthly Income")
+write.csv(dfIncomePreds,"DDSCaseStudy2_Predict_MonthlyIncome.csv",row.names = FALSE)
+
+```
